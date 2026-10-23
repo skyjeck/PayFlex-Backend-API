@@ -10,7 +10,7 @@ const transactionSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["TRANSFER", "FUNDING", "WITHDRAWAL", "BILL_PAYMENT"], // 👈 Added BILL_PAYMENT
+      enum: ["TRANSFER", "FUNDING", "WITHDRAWAL", "BILL_PAYMENT", "LOAN_REPAYMENT", "LOAN_DISBURSEMENT"], // 👈 Added BILL_PAYMENT
       required: true,
     },
     amount: {

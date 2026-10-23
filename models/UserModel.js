@@ -3,12 +3,17 @@ import bcrypt from "bcrypt";
 
 const userSchema = new mongoose.Schema(
   {
-    firstName: { type: String, required: true },
-    lastName: { type: String, required: true },
-    otherName: { type: String, default: "" },
+    firstName: { type: String, required: true, trim: true },
+    lastName: { type: String, required: true, trim: true },
+    otherName: { type: String, default: "", trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    phone: { type: String, required: true },
+    phone: { type: String, required: true, unique: true, trim: true },
     password: { type: String, required: true, select: false },
+    role: {
+      type: String,
+      enum: ["user", "admin", "super_admin"],
+      default: "user",
+    },
     profileImage: { type: String, default: "" },
     
     // Auth & Verification
@@ -16,17 +21,17 @@ const userSchema = new mongoose.Schema(
     otpExpiresAt: { type: Date, default: null },
     isVerified: { type: Boolean, default: false },
 
-    // Transaction Security (default: null allows registration without PIN)
+    // Transaction Security
     transactionPin: {
       type: String,
       default: null,
-      select: false, // Prevents exposing PIN hash in default queries
+      select: false,
     },
 
     // KYC Tier System
     kycTier: {
       type: Number,
-      default: 1, // Tier 1 (Email/Phone), Tier 2 (BVN/NIN), Tier 3 (Utility/ID Document)
+      default: 1,
     },
     kycStatus: {
       type: String,
@@ -36,31 +41,37 @@ const userSchema = new mongoose.Schema(
     kycDetails: {
       bvn: { type: String, default: null },
       nin: { type: String, default: null },
-      documentType: { type: String, default: null }, // 'PASSPORT', 'DRIVERS_LICENSE', 'NIN_CARD'
+      documentType: { type: String, default: null },
       documentNumber: { type: String, default: null },
+      documentImage: { type: String, default: null },
       submittedAt: { type: Date, default: null },
     },
 
-    // Password Reset Fields
+    // Password Reset & Notes
     resetPasswordOTP: { type: String, default: null },
     resetPasswordExpires: { type: Date, default: null },
     kycRejectionReason: { type: String, default: null },
   },
-  
   { timestamps: true }
 );
 
-// Method to hash and set PIN
+// Verify account password
+userSchema.methods.comparePassword = async function (candidatePassword) {
+  if (!this.password) return false;
+  return await bcrypt.compare(candidatePassword, this.password);
+};
+
+// Hash and set PIN
 userSchema.methods.setTransactionPin = async function (rawPin) {
   const salt = await bcrypt.genSalt(10);
   this.transactionPin = await bcrypt.hash(String(rawPin), salt);
 };
 
-// Method to verify candidate PIN during transfers/swaps
+// Verify PIN
 userSchema.methods.comparePin = async function (candidatePin) {
   if (!this.transactionPin) return false;
   return await bcrypt.compare(String(candidatePin), this.transactionPin);
 };
 
-const userModel = mongoose.models.user || mongoose.model("user", userSchema);
+const userModel = mongoose.models.User || mongoose.model("User", userSchema);
 export default userModel;

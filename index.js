@@ -18,6 +18,8 @@ import { initFxRateBroadcaster } from "./controllers/FxSocketsService.js";
 import webhookRouter from "./routes/WebHookRoute.js";
 import historyRouter from "./routes/HistoryRoute.js";
 import notificationRouter from "./routes/NotificationRoute.js";
+import LoanRouter from "./routes/LoanRoute.js";
+import { startLoanNotificationScheduler } from "./controllers/LoanNotificationController.js";
 
 const app = express();
 app.use(morgan('dev'));
@@ -77,8 +79,13 @@ app.use("/api/swap-fx", FxSwapRouter);
 app.use("/api/webhooks", webhookRouter);
 app.use("/api/history", historyRouter);
 app.use("/api/notifications", notificationRouter);
+app.use("/api/loan", LoanRouter);
 
 // 5. IMPORTANT: Listen using `server.listen`, NOT `app.listen`
 server.listen(PORT, () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
+
+  // Start daily loan notification scheduler (fires at 08:00 AM every day)
+  startLoanNotificationScheduler(app);
+  console.log("[LoanNotifications] Daily scheduler initialized.");
 });

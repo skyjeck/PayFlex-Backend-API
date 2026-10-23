@@ -5,14 +5,15 @@ import jwt from "jsonwebtoken";
 import { createNotification } from "./NotificationController.js";
 import validator from "validator";
 import nodemailer from "nodemailer";
+import { v2 as cloudinary } from "cloudinary";
 import "../config/cloudinary.js";
 import crypto from 'node:crypto';
 import { sendEmail } from "../utils/sendMail.js";
 import axios from 'axios';
 
-// Helper: Create JWT Token
-const createToken = (userId) => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "1h" });
+// Helper: Create JWT Token — encodes userId AND role for role-based access control
+const createToken = (userId, role) => {
+  return jwt.sign({ userId, role }, process.env.JWT_SECRET, { expiresIn: "1h" });
 };
 
 // Helper: Generate 6-Digit Numeric OTP
@@ -258,7 +259,7 @@ export const resendOTP = async (req, res) => {
   }
 };
 
-// 4. Login User
+// 4. login
 export const loginUser = async (req, res) => {
   const { email, password } = req.body;
 
@@ -270,7 +271,7 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // Explicitly include +password since select: false is set in UserModel.js
+    // Explicitly include +password since select: false is set in userModel.js
     const normalizedEmail = email.toLowerCase().trim();
     const user = await userModel
       .findOne({ email: normalizedEmail })
@@ -282,8 +283,8 @@ export const loginUser = async (req, res) => {
         .json({ success: false, message: "User does not exist" });
     }
 
-    // Verify raw input string against the retrieved password hash
-    const isMatch = await bcrypt.compare(String(password), user.password);
+    // Use the comparePassword method defined on userModel schema
+    const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res
         .status(400)
@@ -299,7 +300,8 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    const token = createToken(user._id);
+    // Pass user._id and user.role ("user", "admin", or "super_admin") into JWT
+    const token = createToken(user._id, user.role);
 
     await createNotification(
       user._id,
@@ -316,6 +318,11 @@ export const loginUser = async (req, res) => {
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
+        phone: user.phone,
+        role: user.role, // "user", "admin", or "super_admin"
+        kycTier: user.kycTier,
+        kycStatus: user.kycStatus,
+        profileImage: user.profileImage,
       },
       message: "Logged in successfully!",
     });
@@ -328,6 +335,7 @@ export const loginUser = async (req, res) => {
     });
   }
 };
+
 
 // Fetch Current Profile, Verification Tier, and Balance Summary
 export const getProfile = async (req, res) => {
@@ -510,7 +518,7 @@ export const updateProfile = async (req, res) => {
 export const submitKYC = async (req, res) => {
   try {
     const userId = req.userId || req.user?.id;
-    let { bvn, nin, documentType, documentNumber, targetTier } = req.body;
+    let { bvn, nin, documentType, documentNumber, targetTier, } = req.body;
 
     const user = await userModel.findById(userId);
     if (!user) {
@@ -615,15 +623,41 @@ export const submitKYC = async (req, res) => {
         });
       }
 
-      // Check if document file was uploaded via Multer / Cloudinary / S3
-      if (!req.file) {
+      // Support single file via req.file or fields array via req.files
+      const uploadedFile =
+        req.file ||
+        (req.files?.document && req.files.document[0]) ||
+        (req.files?.documentImage && req.files.documentImage[0]) ||
+        (req.files?.file && req.files.file[0]);
+
+      if (!uploadedFile) {
         return res.status(400).json({
           success: false,
           message: "An image file of your document is required for Tier 3 verification.",
         });
       }
 
-      const documentImageUrl = req.file.path || req.file.location || req.file.filename;
+      let documentImageUrl = uploadedFile.path || uploadedFile.location || uploadedFile.filename;
+
+      // Upload buffer or file to Cloudinary if configured
+      if (uploadedFile.buffer) {
+        const uploadResult = await new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { folder: "kyc_documents" },
+            (error, result) => {
+              if (error) reject(error);
+              else resolve(result);
+            }
+          );
+          stream.end(uploadedFile.buffer);
+        });
+        documentImageUrl = uploadResult.secure_url;
+      } else if (uploadedFile.path) {
+        const uploadResult = await cloudinary.uploader.upload(uploadedFile.path, {
+          folder: "kyc_documents",
+        });
+        documentImageUrl = uploadResult.secure_url;
+      }
 
       user.kycDetails.documentType = documentType;
       // Use existing NIN if documentType is NIN_CARD, otherwise use passed documentNumber
@@ -825,14 +859,7 @@ export const verifyResetOTP = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid OTP code." });
     }
 
-    // 2. Log database state vs input
-    console.log("--- OTP DEBUG LOGS ---");
-    console.log("Input Hashed OTP: ", hashedOTP);
-    console.log("DB Saved OTP Hash:", user.resetPasswordOTP);
-    console.log("DB Expiry Time:   ", user.resetPasswordExpires);
-    console.log("Current Server Time:", new Date(Date.now()));
-    console.log("Is OTP Expired?:  ", user.resetPasswordExpires ? user.resetPasswordExpires < Date.now() : "No Expiry Set");
-    console.log("----------------------");
+    // 2. Validate OTP hash and expiry
 
     // 3. Perform manual comparison
     if (!user.resetPasswordOTP || user.resetPasswordOTP !== hashedOTP) {
